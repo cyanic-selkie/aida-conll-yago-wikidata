@@ -55,7 +55,6 @@ enum EntityType {
 #[derive(Debug)]
 struct TokenRecord {
     document_id: u32,
-    sentence_index: u32,
     token: String,
     entity: EntityType,
 }
@@ -78,7 +77,6 @@ struct Entity {
 struct DataPoint {
     uuid: String,
     document_id: u32,
-    sentence_index: u32,
     text: String,
     entities: Vec<Entity>,
 }
@@ -93,7 +91,6 @@ fn parse_conll(
     let mut validation = vec![];
     let mut test = vec![];
 
-    let mut sentence_index = 0;
     let mut document_id = 0;
     let mut document_split = Split::Train;
 
@@ -105,7 +102,6 @@ fn parse_conll(
         let line = line.unwrap();
 
         if line.len() == 0 {
-            sentence_index += 1;
             continue;
         }
 
@@ -123,7 +119,6 @@ fn parse_conll(
                     _ => Split::Train,
                 };
 
-                sentence_index = 0;
                 continue;
             }
         }
@@ -139,7 +134,6 @@ fn parse_conll(
         if fields.len() == 4 {
             split.push(TokenRecord {
                 document_id,
-                sentence_index,
                 token,
                 entity: EntityType::OutOfDistribution,
             });
@@ -147,7 +141,6 @@ fn parse_conll(
             let title = fields[4].chars().skip(29).nfc().collect::<String>();
             split.push(TokenRecord {
                 document_id,
-                sentence_index,
                 token,
                 entity: EntityType::InDistribution(title.clone()),
             });
@@ -156,7 +149,6 @@ fn parse_conll(
         } else {
             split.push(TokenRecord {
                 document_id,
-                sentence_index,
                 token,
                 entity: EntityType::None,
             });
@@ -172,9 +164,9 @@ fn generate_dataset(
 ) -> Vec<DataPoint> {
     let mut examples = vec![];
 
-    for ((document_id, sentence_index), group) in &split
+    for (document_id, group) in &split
         .into_iter()
-        .group_by(|x| (x.document_id, x.sentence_index))
+        .group_by(|x| x.document_id)
     {
         let mut text = String::new();
         let mut entities = vec![];
@@ -223,7 +215,6 @@ fn generate_dataset(
         examples.push(DataPoint {
             uuid: Uuid::new_v4().to_string(),
             document_id,
-            sentence_index,
             text,
             entities,
         });
@@ -253,7 +244,6 @@ fn write_dataset(split: Vec<DataPoint>, path: &str) {
     let schema = Schema::from(vec![
         Field::new("uuid", DataType::Utf8, false),
         Field::new("document_id", DataType::UInt32, false),
-        Field::new("sentence_index", DataType::UInt32, false),
         Field::new("text", DataType::Utf8, false),
         Field::new(
             "entities",
