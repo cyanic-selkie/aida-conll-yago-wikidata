@@ -28,6 +28,9 @@ use uuid::Uuid;
 struct Args {
     /// Path to the AIDA ConLL-YAGO dataset in the TSV format.
     #[arg(long)]
+    input_aida: String,
+    /// Path to the ConLL2003 dataset in the TSV format.
+    #[arg(long)]
     input_conll: String,
     /// Path to the mappings between Wikipedia's titles and Wikidata's QIDs in the Apache Avro format.
     #[arg(long)]
@@ -47,8 +50,8 @@ struct MappingRecord {
 
 #[derive(Debug, PartialEq, Clone)]
 enum EntityType {
-    OutOfDistribution,
-    InDistribution(String),
+    OutOfDistribution(u32),
+    InDistribution(String, u32),
     None,
 }
 
@@ -69,6 +72,7 @@ enum Split {
 struct Entity {
     start: u32,
     end: u32,
+    tag: u32,
     pageid: Option<u32>,
     qid: Option<u32>,
 }
@@ -82,7 +86,8 @@ struct DataPoint {
 }
 
 fn parse_conll(
-    path: &str,
+    path_aida: &str,
+    path_conll: &str,
 ) -> (
     (Vec<TokenRecord>, Vec<TokenRecord>, Vec<TokenRecord>),
     HashSet<String>,
@@ -96,21 +101,19 @@ fn parse_conll(
 
     let mut titles = HashSet::new();
 
-    let reader = BufReader::new(File::open(path).unwrap());
+    let reader_aida = BufReader::new(File::open(path_aida).unwrap());
+    let reader_conll = BufReader::new(File::open(path_conll).unwrap());
 
-    for line in reader.lines() {
-        let line = line.unwrap();
+    for (line_aida, line_conll) in reader_aida.lines().zip(reader_conll.lines()) {
+        let line_aida = line_aida.unwrap();
+        let line_conll = line_conll.unwrap();
 
-        if line.len() == 0 {
-            continue;
-        }
+        let fields_aida = line_aida.split("\t").collect::<Vec<_>>();
 
-        let fields = line.split("\t").collect::<Vec<_>>();
-
-        if fields.len() == 1 {
+        if fields_aida.len() == 1 {
             if let Some((_, id, split)) = regex_captures!(
                 r#"-DOCSTART- \(([\d]+)(testa|testb)? [^\)\\]*(?:\\.[^\)\\]*)*\)"#,
-                &fields[0]
+                &fields_aida[0]
             ) {
                 document_id = id.parse::<u32>().unwrap();
                 document_split = match split {
@@ -123,7 +126,7 @@ fn parse_conll(
             }
         }
 
-        let token = fields[0].nfc().collect::<String>();
+        let token = fields_aida[0].nfc().collect::<String>();
 
         let split = match document_split {
             Split::Train => &mut train,
@@ -131,18 +134,30 @@ fn parse_conll(
             Split::Test => &mut test,
         };
 
-        if fields.len() == 4 {
+        let fields_conll = line_conll.split(" ").collect::<Vec<_>>();
+        let tag = fields_conll.last().unwrap();
+
+        let tag = match tag {
+            &"B-PER" | &"I-PER" => 1,
+            &"B-LOC" | &"I-LOC" => 2,
+            &"B-ORG" | &"I-ORG" => 3,
+            &"B-MISC" | &"I-MISC" => 4,
+            _ => 0,
+        }
+        .to_owned();
+
+        if fields_aida.len() == 4 {
             split.push(TokenRecord {
                 document_id,
                 token,
-                entity: EntityType::OutOfDistribution,
+                entity: EntityType::OutOfDistribution(tag),
             });
-        } else if fields.len() > 4 {
-            let title = fields[4].chars().skip(29).nfc().collect::<String>();
+        } else if fields_aida.len() > 4 {
+            let title = fields_aida[4].chars().skip(29).nfc().collect::<String>();
             split.push(TokenRecord {
                 document_id,
                 token,
-                entity: EntityType::InDistribution(title.clone()),
+                entity: EntityType::InDistribution(title.clone(), tag),
             });
 
             titles.insert(title);
@@ -164,17 +179,11 @@ fn generate_dataset(
 ) -> Vec<DataPoint> {
     let mut examples = vec![];
 
-    for (document_id, group) in &split
-        .into_iter()
-        .group_by(|x| x.document_id)
-    {
+    for (document_id, group) in &split.into_iter().group_by(|x| x.document_id) {
         let mut text = String::new();
         let mut entities = vec![];
 
-        for (mention, group) in &group
-            .map(|x| (x.token, x.entity))
-            .group_by(|x| (x.clone().1))
-        {
+        for (mention, group) in &group.map(|x| (x.token, x.entity)).group_by(|x| x.clone().1) {
             let tokens = group.map(|x| x.0).collect::<Vec<_>>().join(" ");
 
             let start = (text.chars().count() + if text.is_empty() { 0 } else { 1 }) as u32;
@@ -183,17 +192,19 @@ fn generate_dataset(
                 + tokens.chars().count()) as u32;
 
             let mention = match mention {
-                EntityType::OutOfDistribution => Some(Entity {
+                EntityType::OutOfDistribution(tag) => Some(Entity {
                     start,
                     end,
+                    tag,
                     pageid: None,
                     qid: None,
                 }),
-                EntityType::InDistribution(title) => {
+                EntityType::InDistribution(title, tag) => {
                     let (pageid, qid) = *mapping.get(&title).unwrap();
                     Some(Entity {
                         start,
                         end,
+                        tag,
                         pageid: Some(pageid),
                         qid,
                     })
@@ -252,6 +263,7 @@ fn write_dataset(split: Vec<DataPoint>, path: &str) {
                 DataType::Struct(vec![
                     Field::new("start", DataType::UInt32, false),
                     Field::new("end", DataType::UInt32, false),
+                    Field::new("tag", DataType::UInt32, false),
                     Field::new("pageid", DataType::UInt32, true),
                     Field::new("qid", DataType::UInt32, true),
                 ]),
@@ -283,7 +295,7 @@ fn write_dataset(split: Vec<DataPoint>, path: &str) {
 fn main() {
     let args = Args::parse();
 
-    let ((train, validation, test), titles) = parse_conll(&args.input_conll);
+    let ((train, validation, test), titles) = parse_conll(&args.input_aida, &args.input_conll);
 
     let mut mapping = HashMap::new();
     // Corrections.
