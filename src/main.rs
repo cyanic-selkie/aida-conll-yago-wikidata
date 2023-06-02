@@ -21,7 +21,6 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use unicode_normalization::UnicodeNormalization;
-use uuid::Uuid;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -75,11 +74,11 @@ struct Entity {
     tag: u32,
     pageid: Option<u32>,
     qid: Option<u32>,
+    title: Option<String>,
 }
 
 #[derive(Debug, ArrowField, ArrowSerialize, ArrowDeserialize)]
 struct DataPoint {
-    uuid: String,
     document_id: u32,
     text: String,
     entities: Vec<Entity>,
@@ -198,6 +197,7 @@ fn generate_dataset(
                     tag,
                     pageid: None,
                     qid: None,
+                    title: None,
                 }),
                 EntityType::InDistribution(title, tag) => {
                     let (pageid, qid) = *mapping.get(&title).unwrap();
@@ -207,6 +207,7 @@ fn generate_dataset(
                         tag,
                         pageid: Some(pageid),
                         qid,
+                        title: Some(title),
                     })
                 }
                 EntityType::None => None,
@@ -224,7 +225,6 @@ fn generate_dataset(
         }
 
         examples.push(DataPoint {
-            uuid: Uuid::new_v4().to_string(),
             document_id,
             text,
             entities,
@@ -253,7 +253,6 @@ fn write_dataset(split: Vec<DataPoint>, path: &str) {
     let iter = vec![Ok(chunk)];
 
     let schema = Schema::from(vec![
-        Field::new("uuid", DataType::Utf8, false),
         Field::new("document_id", DataType::UInt32, false),
         Field::new("text", DataType::Utf8, false),
         Field::new(
@@ -266,6 +265,7 @@ fn write_dataset(split: Vec<DataPoint>, path: &str) {
                     Field::new("tag", DataType::UInt32, false),
                     Field::new("pageid", DataType::UInt32, true),
                     Field::new("qid", DataType::UInt32, true),
+                    Field::new("title", DataType::Utf8, true),
                 ]),
                 false,
             ))),
