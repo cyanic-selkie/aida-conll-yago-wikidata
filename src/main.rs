@@ -49,8 +49,8 @@ struct MappingRecord {
 
 #[derive(Debug, PartialEq, Clone)]
 enum EntityType {
-    OutOfDistribution(u32),
-    InDistribution(String, u32),
+    OutOfDistribution(String),
+    InDistribution(String, String),
     None,
 }
 
@@ -71,7 +71,7 @@ enum Split {
 struct Entity {
     start: u32,
     end: u32,
-    tag: u32,
+    tag: String,
     pageid: Option<u32>,
     qid: Option<u32>,
     title: Option<String>,
@@ -137,11 +137,11 @@ fn parse_conll(
         let tag = fields_conll.last().unwrap();
 
         let tag = match tag {
-            &"B-PER" | &"I-PER" => 1,
-            &"B-LOC" | &"I-LOC" => 2,
-            &"B-ORG" | &"I-ORG" => 3,
-            &"B-MISC" | &"I-MISC" => 4,
-            _ => 0,
+            &"B-PER" | &"I-PER" => "PER",
+            &"B-LOC" | &"I-LOC" => "LOC",
+            &"B-ORG" | &"I-ORG" => "ORG",
+            &"B-MISC" | &"I-MISC" => "MISC",
+            _ => "",
         }
         .to_owned();
 
@@ -262,7 +262,7 @@ fn write_dataset(split: Vec<DataPoint>, path: &str) {
                 DataType::Struct(vec![
                     Field::new("start", DataType::UInt32, false),
                     Field::new("end", DataType::UInt32, false),
-                    Field::new("tag", DataType::UInt32, false),
+                    Field::new("tag", DataType::Utf8, false),
                     Field::new("pageid", DataType::UInt32, true),
                     Field::new("qid", DataType::UInt32, true),
                     Field::new("title", DataType::Utf8, true),
